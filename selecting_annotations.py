@@ -1,6 +1,5 @@
 import sys
 import getopt
-import pandas as pd
 import re
 from Bio import SeqIO
 
