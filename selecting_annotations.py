@@ -1,7 +1,10 @@
 import sys
 import getopt
-import re
+
 from Bio import SeqIO
+import pandas as pd
+import re
+import csv
 
 class Selecting():
     """A class to select the gene annotations in the .gff file by the fasta file
@@ -11,75 +14,76 @@ class Selecting():
     """
 
     def __init__(self):
-        self.dict_fasta = None
+        self.list_fasta = None
+        self.result = None
 
     def reading_fasta(self, fasta_path):
-        """this method loads a fasta sequence and create a dict with
-        the name and proteinId ('name':proteinId)
+            """this method loads a fasta sequence and create a list with
+            the name and proteinId
 
-        Args:
-            fasta_path ([str]): the fasta file path
-        """
-        
-        arq_fasta = SeqIO.parse(fasta_path, "fasta")
-        
-        self.dict_fasta = dict()
-        
-        regex_proteinID = re.compile(r"\|[0-9]+\|")
-        regex_name = re.compile(r"\|[A-Za-z0-9_.#]+$")
-
-        for seq_record in arq_fasta:
+            Args:
+                fasta_path ([str]): the fasta file path
+            """
             
-            match_protein = regex_proteinID.search(seq_record.id)
-            proteinID = seq_record.id[(match_protein.start()+1):(match_protein.end()-1)]
+            arq_fasta = SeqIO.parse(fasta_path, "fasta")
             
-            match_name = regex_name.search(seq_record.id)
-            name = seq_record.id[(match_name.start()+1):(match_name.end())]
+            self.list_fasta = list()
+            
+            regex_proteinID = re.compile(r"\|[0-9]+\|")
+            regex_name = re.compile(r"\|[A-Za-z0-9_.#]+$")
 
-            self.dict_fasta[name] = proteinID
-    
-    def comparisons(self, gff_path, output):
+            for seq_record in arq_fasta:
+                
+                match_protein = regex_proteinID.search(seq_record.id)
+                proteinID = seq_record.id[(match_protein.start()+1):(match_protein.end()-1)]
+                
+                match_name = regex_name.search(seq_record.id)
+                name = seq_record.id[(match_name.start()+1):(match_name.end())]
+
+                self.list_fasta.append(str(name + ',' + proteinID))
+
+    def comparisons(self, gff_path):
         """this method select the gff sequences when there's a match
-        between name and proteinID of dict (fasta file) and gff file
+            between name and proteinID of fasta list (reading_fasta) and gff file
+
+            Args:
+                gff_path ([str]): gff file path
+        """
+
+        self.result = pd.read_csv(gff_path, sep='\t', header=None)
+
+        self.result = self.result.rename(columns={0:'SeqId', 1:'Source', 2:'type', 3:'start', 4:'end', 5:'score', 6:'strand', 7:'phase', 8:'attributes'})
+
+        self.result = self.result.join(self.result['attributes'].str.split(';', expand=True))
+        self.result.rename(columns={0:'name', 1:'proteinId', 2:'exonNumber', 3:'product_name'}, inplace=True)
+        self.result.drop('exonNumber', inplace=True, axis=1)
+        self.result.drop('product_name', inplace=True, axis=1)
+
+        self.result['name'] = self.result['name'].str.extract('"(.+)"')
+        self.result['proteinId'] = self.result['proteinId'].str.extract(r'(proteinId [0-9]+)')
+        self.result['proteinId'] = self.result['proteinId'].str.extract(r'([0-9]+)')
+
+        self.result.dropna(subset=['proteinId'], inplace=True)
+
+        self.result['nameProt'] = self.result['name'] + ',' + self.result['proteinId']
+
+        array_bool = self.result.nameProt.isin(self.list_fasta)
+
+        self.result = self.result[array_bool]
+
+        self.result.drop('name', inplace=True, axis=1)
+        self.result.drop('proteinId', inplace=True, axis=1)
+        self.result.drop('nameProt', inplace=True, axis=1)
+
+                
+    def save_to_GFF(self, output):
+        """A method to save the ordenated sequence into a .gff file
 
         Args:
-            gff_path ([str]): gff file path
-            output ([str]): output name
+            output ([gff]): name to save the gff file
         """
-    
-        arq_gff = open(gff_path,'r')
-        new_arq_gff = open(output, 'w')
-        
-        regex_name = re.compile('"(.+)"')
-        regex_proteinID = re.compile('[0-9]+')
-        
-        for line in arq_gff:
-                    
-            line_analysis = line
-            
-            if 'proteinId' in line_analysis:
 
-                line_analysis = line_analysis.split('\t')[8].split(';')
-
-                try:
-                    name = line_analysis[0]
-                    name = str(regex_name.findall(name)).replace("'", "").strip('[]')
-                    
-                    proteinID = line_analysis[1]
-                    proteinID = str(regex_proteinID.findall(proteinID)).replace("'", "").strip('[]')
-                
-                    if name in self.dict_fasta.keys():
-                        if self.dict_fasta[name] == proteinID:
-                            new_arq_gff.write(line)
-
-                except:
-                    continue
-                
-            else:
-                continue
-        
-        arq_gff.close()
-        new_arq_gff.close()
+        self.result.to_csv(output+'.gff', sep='\t', index=False, header=False, quoting=csv.QUOTE_NONE)
 
 
 if __name__ == "__main__":
@@ -120,15 +124,16 @@ if __name__ == "__main__":
                 sys.exit(4)
 
         elif opt in ('-o', '--output'):
-            if re.match('.+gff$', arg):
+            if re.match('.+', arg):
                 OUTPUT = arg
             else:
-                print("-o isn't a gff file output")
+                print("-o missing the output name")
                 sys.exit(5)
 
     if FASTA_PATH and GFF_PATH and OUTPUT:
         SELECTING.reading_fasta(FASTA_PATH)
-        SELECTING.comparisons(GFF_PATH, OUTPUT)
+        SELECTING.comparisons(GFF_PATH)
+        SELECTING.save_to_GFF(OUTPUT)
 
     else:
         print('missing arguments -f, -g or -o')
